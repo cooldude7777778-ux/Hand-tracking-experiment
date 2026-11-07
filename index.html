@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>MATRIX//HANDLINK AR</title>
+<meta name="theme-color" content="#00ff9c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<style>
+:root{--g:#00ff9c;--c:#00e5ff}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;overflow:hidden;background:#000;color:var(--g);font:12px/1.6 ui-monospace,Consolas,monospace;touch-action:none;user-select:none}
+video,#gl,#sk{position:fixed;inset:0;width:100%;height:100%}
+video{object-fit:cover}.m{transform:scaleX(-1)}
+#fr{position:fixed;inset:8px;border:1px solid #00ff9c40;pointer-events:none}
+.hud{position:fixed;z-index:5;pointer-events:none;text-transform:uppercase;letter-spacing:.08em;text-shadow:0 0 6px var(--g);padding:max(14px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+.tl{top:0;left:0}.tr{top:0;right:0;text-align:right}.bl{bottom:0;left:0}.br{bottom:0;right:0;text-align:right}
+button{pointer-events:auto;font:inherit;color:var(--g);background:#001a10cc;border:1px solid var(--g);padding:10px 16px;text-transform:uppercase;letter-spacing:.12em;box-shadow:0 0 12px #00ff9c60 inset;cursor:pointer}
+body::after{content:"";position:fixed;inset:0;z-index:6;pointer-events:none;background:repeating-linear-gradient(0deg,#0000 0 2px,#00ff9c10 2px 3px),radial-gradient(#0000 60%,#000b)}
+#st{position:fixed;inset:0;z-index:9;background:#010a06;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:24px}
+h1{font-size:clamp(22px,7vw,40px);letter-spacing:.2em;animation:gl 3s infinite}
+#st p{max-width:480px;color:#7dffd0;opacity:.85}
+@keyframes gl{0%,92%,100%{transform:none;text-shadow:0 0 12px var(--g)}94%{transform:translateX(-4px);text-shadow:3px 0 var(--c),-3px 0 #f0f}97%{transform:translateX(5px)}}
+</style></head>
+<body>
+<video id="v" playsinline muted autoplay></video><canvas id="sk"></canvas><canvas id="gl"></canvas><div id="fr"></div>
+<div class="hud tl"><b>MATRIX//HANDLINK</b><br>FPS <span id="fps">--</span> · TRK <span id="trk">--</span><br>CAM <span id="cam">OFF</span></div>
+<div class="hud tr">HANDS <span id="hn">0</span><br><span id="hst">NO SIGNAL</span></div>
+<div class="hud bl">ACTIVE GESTURES<br><span id="gs">—</span></div>
+<div class="hud br">CUBES <span id="cnt">0</span><br><button id="sw">⟲ CAM</button></div>
+<div id="st"><h1>MATRIX//HANDLINK</h1>
+<p>▲ ТРЕУГОЛЬНИК — большой + указательный + средний вместе: куб, размер = разведение пальцев<br>☝ МИЗИНЕЦ — материализует постоянный куб, опусти — он застынет<br>◆ ЩЕПОТКА у куба — захват и перенос в воздухе</p>
+<button id="go">INITIALIZE</button><p id="er"></p></div>
+<script>
+const $=i=>document.getElementById(i),V=$('v'),sk=$('sk').getContext('2d'),AD=THREE.AdditiveBlending;
+const R=new THREE.WebGLRenderer({canvas:$('gl'),alpha:true,antialias:true}),S=new THREE.Scene(),C=new THREE.PerspectiveCamera(60,1,.1,50);
+C.position.z=5;R.setClearColor(0,0);
+let W,H,mir=true,facing='user',stream,hands,busy=0,res,AR=1.78,fr=0,tk=0,fT=0,lt=0,A;
+const all=[],HS=[0,1].map(()=>({f:{},z:0,ls:0,lt:0,sph:[]}));
+const BN=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+function rs(){W=innerWidth;H=innerHeight;R.setPixelRatio(Math.min(devicePixelRatio,2));R.setSize(W,H,false);C.aspect=W/H;C.updateProjectionMatrix();$('sk').width=W;$('sk').height=H}
+addEventListener('resize',rs);rs();
+/* ---------- coordinates ---------- */
+const px=l=>{const vw=V.videoWidth||1280,vh=V.videoHeight||720,s=Math.max(W/vw,H/vh),x=l.x*vw*s+(W-vw*s)/2,y=l.y*vh*s+(H-vh*s)/2;return[mir?W-x:x,y]};
+const wp=(x,y,z)=>{const v=new THREE.Vector3(x/W*2-1,-(y/H*2-1),.5).unproject(C).sub(C.position).normalize();return C.position.clone().add(v.multiplyScalar((z-C.position.z)/v.z))};
+const D=(a,b)=>Math.hypot((a.x-b.x)*AR,a.y-b.y);
+/* ---------- audio ---------- */
+const au=()=>{A=A||new(window.AudioContext||window.webkitAudioContext)();A.state=='suspended'&&A.resume()};
+function tone(ty,f0,f1,d,v,lp){if(!A)return;const t=A.currentTime,o=A.createOscillator(),g=A.createGain(),f=A.createBiquadFilter();o.type=ty;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(Math.max(f1,20),t+d);f.type='lowpass';f.frequency.value=lp||4000;g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(v,t+Math.min(.03,d/3));g.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(f);f.connect(g);g.connect(A.destination);o.start(t);o.stop(t+d+.05)}
+const sfx={
+cr(){tone('sawtooth',55,140,1.1,.14,500);tone('square',110,330,.9,.04,1200);tone('sine',440,1320,.6,.05)},
+gl(s){const f=200+s*280;tone('square',f,f*(.6+Math.random()*.8),.07,.05,3500)},
+ck(v=1){tone('square',1800,300,.05,.1*v,6000);tone('sine',120,45,.12,.22*v)},
+dis(){for(let i=0;i<7;i++)setTimeout(()=>tone('sawtooth',80+Math.random()*1500,40+Math.random()*300,.06,.05,3000),i*45)},
+gr(){tone('triangle',420,840,.09,.12)}};
+/* ---------- matrix cube ---------- */
+const cv=document.createElement('canvas');cv.width=cv.height=128;
+const cx=cv.getContext('2d'),T=new THREE.CanvasTexture(cv),dr=Array.from({length:13},()=>Math.random()*13|0),CH='01アイウエオカキクケコサシスセソ<>=+*ΣΩ';
+function rain(){cx.fillStyle='rgba(0,26,14,.14)';cx.fillRect(0,0,128,128);cx.font='10px monospace';
+dr.forEach((y,i)=>{cx.fillStyle=Math.random()<.1?'#d8fff0':'#0f9';cx.fillText(CH[Math.random()*CH.length|0],i*10,y*10);dr[i]=y*10>128&&Math.random()>.9?0:y+1});
+cx.strokeStyle='#0f9';cx.strokeRect(1,1,126,126);T.needsUpdate=true}
+const BG=new THREE.BoxGeometry(1,1,1),EG=new THREE.EdgesGeometry(BG);
+function mk(size,pos){
+const m=c=>({color:c,transparent:true,opacity:0,blending:AD,depthWrite:false}),n=90,tg=new Float32Array(n*3),sc=new Float32Array(n*3),g=new THREE.Group();
+for(let i=0;i<n;i++){const a=[Math.random()-.5,Math.random()-.5,Math.random()-.5];a[i%3]=Math.random()<.5?-.5:.5;tg.set(a,i*3);for(let k=0;k<3;k++)sc[i*3+k]=(Math.random()-.5)*7}
+const ed=new THREE.LineSegments(EG,new THREE.LineBasicMaterial(m(0x00ff9c))),
+me=new THREE.Mesh(BG,new THREE.MeshBasicMaterial({...m(0x00ffaa),map:T,side:2})),
+pg=new THREE.BufferGeometry();pg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(n*3),3));
+const pt=new THREE.Points(pg,new THREE.PointsMaterial({...m(0x9dffd8),size:.05}));
+g.add(me,ed,pt);g.position.copy(pos);S.add(g);
+return{g,ed,me,pt,tg,sc,n,p:0,t:1,sz:size,ts:size,pos:pos.clone(),tp:pos.clone(),gl:0,hl:0,held:0,per:0,id:Math.random()*9}}
+function up(c,dt,t){
+const d=c.t-c.p;c.p+=Math.sign(d)*Math.min(Math.abs(d),dt/(c.t?.9:.55));
+const e=1-(1-c.p)**3,f=c.gl?Math.random():1;
+c.sz+=(c.ts-c.sz)*Math.min(1,dt*10);c.pos.lerp(c.tp,Math.min(1,dt*16));
+const k=c.sz*(.25+.75*e)*(c.hl?1.12+.05*Math.sin(t*18):1);
+c.g.position.copy(c.pos);if(c.gl)c.g.position.add(new THREE.Vector3((Math.random()-.5)*.25,(Math.random()-.5)*.25,0));
+c.g.scale.set(k*(c.gl&&f<.3?1.6:1),k*(c.gl&&f>.8?.4:1),k);c.g.rotation.y+=dt*.7;c.g.rotation.x+=dt*.3;
+const o=e*(c.gl&&f<.35?.15:1);
+c.ed.material.opacity=o;c.me.material.opacity=.75*o;c.pt.material.opacity=o;
+c.ed.material.color.setHex(c.hl?0xffffff:0x00ff9c);c.me.material.color.setHex(c.hl?0x66ffff:0x00ffaa);
+const a=c.pt.geometry.attributes.position.array;
+for(let i=0;i<c.n*3;i++)a[i]=c.sc[i]+(c.tg[i]-c.sc[i])*e+(e>.9?Math.sin(t*2+i+c.id)*.03:0);
+c.pt.geometry.attributes.position.needsUpdate=true}
+const rm=c=>{S.remove(c.g);[c.ed,c.me,c.pt].forEach(o=>o.material.dispose());c.pt.geometry.dispose()};
+/* ---------- gestures ---------- */
+const dbc=(h,k,r)=>{const s=h.f[k]||(h.f[k]={n:0,on:0});s.n=r?(s.n>0?s.n+1:1):(s.n<0?s.n-1:-1);if(!s.on&&s.n>=3)s.on=1;else if(s.on&&s.n<=-3)s.on=0;return s.on};
+function proc(h,l,i,act){
+const raw={tri:0,sp:0,pi:0};
+if(l){
+const d=(a,b)=>D(l[a],l[b]),hs=d(0,9),ex=(t,p)=>d(t,0)>d(p,0)*1.08;
+h.sd=(d(4,8)+d(8,12)+d(4,12))/3/hs;
+raw.tri=h.sd<(h.f.tri?.on?1.05:.45)&&d(12,0)>hs*1.15;
+raw.sp=!raw.tri&&ex(20,18)&&!ex(8,6)&&!ex(12,10)&&!ex(16,14);
+raw.pi=!raw.tri&&!raw.sp&&d(4,8)/hs<(h.f.pi?.on?.5:.3);
+h.z+=(Math.max(-3,Math.min(2.5,(hs-.17)*10))-h.z)*.3;
+const P=a=>px(l[a]),a=P(4),b=P(8),c=P(12),k=P(20);
+h.wt=wp((a[0]+b[0]+c[0])/3,(a[1]+b[1]+c[1])/3,h.z);
+h.wk=wp(k[0],k[1]-.13*H,h.z);
+h.pp=[(a[0]+b[0])/2,(a[1]+b[1])/2];h.wi=wp(h.pp[0],h.pp[1],h.z)}
+const on={};for(const k in raw)on[k]=dbc(h,k,raw[k]);
+/* triangle: temporary cube, scale = finger spread */
+if(on.tri){
+if(!h.tri){h.tri=mk(.5,h.wt);all.push(h.tri);sfx.cr()}
+const s=Math.max(.45,Math.min(2.6,.3+h.sd*2.3)),n=performance.now();
+h.tri.tp.copy(h.wt);h.tri.ts=s;
+if(Math.abs(s-h.ls)>.07&&n-h.lt>80){sfx.gl(s);h.ls=s;h.lt=n}
+act.push(`H${i+1} ▲ TRIANGLE ×${s.toFixed(2)}`)
+}else if(h.tri){h.tri.t=0;h.tri.gl=1;sfx.dis();h.tri=0}
+/* pinky: persistent cube, freezes when pinky drops */
+if(on.sp){
+if(!h.sp){h.sp=mk(.75,h.wk);h.sph=[];all.push(h.sp);sfx.cr()}
+h.sp.tp.copy(h.wk);h.sph.push(h.wk.clone());if(h.sph.length>4)h.sph.shift();
+act.push(`H${i+1} ☝ PINKY SPAWN`)
+}else if(h.sp){
+const c=h.sp;c.tp.copy(h.sph[0]);c.per=1;sfx.ck();h.sp=0;
+const ps=all.filter(x=>x.per);if(ps.length>40){ps[0].per=0;ps[0].t=0;ps[0].gl=1}}
+/* pinch: grab & drag */
+if(on.pi){
+if(!h.gr){let best=null,bd=1e9;
+all.forEach(c=>{if(!c.per||c.held)return;const q=c.pos.clone().project(C),d=Math.hypot((q.x+1)/2*W-h.pp[0],(1-q.y)/2*H-h.pp[1]);
+if(d<70+c.sz*H*.1&&d<bd){bd=d;best=c}});
+if(best){h.gr=best;best.hl=1;best.held=1;best.off=best.pos.clone().sub(h.wi);sfx.gr()}}
+if(h.gr)h.gr.tp.copy(h.wi).add(h.gr.off);
+act.push(`H${i+1} ◆ PINCH${h.gr?' · GRAB':''}`)
+}else if(h.gr){h.gr.hl=0;h.gr.held=0;sfx.ck(.7);h.gr=0}}
+function onR(r){
+tk++;res=r;AR=V.videoWidth/V.videoHeight||1.78;
+const L=r.multiHandLandmarks||[],act=[];
+$('hn').textContent=L.length;$('hst').textContent=L.length?'TARGET LOCKED':'NO SIGNAL';
+HS.forEach((h,i)=>proc(h,L[i],i,act));
+$('gs').innerHTML=act.join('<br>')||'—'}
+/* ---------- render loop ---------- */
+function loop(now){
+requestAnimationFrame(loop);
+const dt=Math.min(.05,(now-lt)/1000||.016),t=now/1000;lt=now;fr++;
+if(now-fT>=1000){$('fps').textContent=fr;$('trk').textContent=tk;fr=tk=0;fT=now}
+if(fr%2==0)rain();
+all.forEach(c=>up(c,dt,t));
+for(let i=all.length;i--;){const c=all[i];if(c.t==0&&c.p<=.001){rm(c);all.splice(i,1)}}
+$('cnt').textContent=all.filter(c=>c.per).length;
+sk.clearRect(0,0,W,H);
+(res?.multiHandLandmarks||[]).forEach(l=>{const p=l.map(px);
+sk.strokeStyle='#00ff9c99';sk.lineWidth=2;sk.beginPath();BN.forEach(([a,b])=>{sk.moveTo(...p[a]);sk.lineTo(...p[b])});sk.stroke();
+sk.fillStyle='#00e5ff';p.forEach(([x,y],i)=>sk.fillRect(x-2,y-2,i%4?4:7,i%4?4:7))});
+R.render(S,C)}
+requestAnimationFrame(loop);
+/* ---------- camera & tracking ---------- */
+async function cam(){
+stream?.getTracks().forEach(t=>t.stop());
+stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}});
+V.srcObject=stream;await V.play();
+mir=facing=='user';V.classList.toggle('m',mir);
+const tr=stream.getVideoTracks()[0];
+try{await tr.applyConstraints({advanced:[{exposureMode:'continuous'},{focusMode:'continuous'},{whiteBalanceMode:'continuous'}]})}catch(e){}
+$('cam').textContent=(mir?'FRONT ':'REAR ')+Math.round(tr.getSettings().frameRate||0)+'FPS'}
+const pump=async()=>{
+if(!busy&&V.readyState>=2){busy=1;try{await hands.send({image:V})}catch(e){}busy=0}
+V.requestVideoFrameCallback?V.requestVideoFrameCallback(pump):requestAnimationFrame(pump)};
+$('go').onclick=async()=>{
+try{
+au();$('er').textContent='LOADING NEURAL NET…';
+if(!window.Hands)throw Error('MediaPipe CDN недоступен');
+hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}`});
+hands.setOptions({maxNumHands:2,modelComplexity:/Mobi|Android/i.test(navigator.userAgent)?0:1,minDetectionConfidence:.6,minTrackingConfidence:.5});
+hands.onResults(onR);await cam();await hands.initialize();$('st').remove();pump()
+}catch(e){$('er').textContent='ERROR: '+(e.name=='NotAllowedError'?'ДОСТУП К КАМЕРЕ ЗАПРЕЩЁН':e.message)}};
+$('sw').onclick=async()=>{const p=facing;facing=p=='user'?'environment':'user';try{await cam()}catch(e){facing=p}};
+if('serviceWorker'in navigator&&location.protocol!='file:')navigator.serviceWorker.register('sw.js');
+</script></body></html>
